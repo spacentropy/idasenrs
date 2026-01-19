@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use btleplug::api::{
-    Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
+    Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
 };
 use btleplug::platform::{Manager, Peripheral};
 use byteorder::{ByteOrder, LittleEndian};
@@ -109,24 +109,59 @@ impl IdasenDesk {
             .next()
             .ok_or_else(|| anyhow!("No Bluetooth adapter found"))?;
 
+        // Get the event stream before starting scan
+        let mut events = adapter.events().await?;
+
         // Start scanning
         adapter
             .start_scan(ScanFilter::default())
             .await
             .context("Failed to start scan")?;
 
-        // Wait briefly for scan results
-        time::sleep(Duration::from_secs(5)).await;
+        // Use a channel to communicate between the event thread and main task
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Peripheral>(1);
+        let target_id = device_id_str.to_string();
+        let adapter_clone = adapter.clone();
 
-        let peripherals = adapter.peripherals().await?;
+        // Spawn a thread to handle BLE events (btleplug doesn't use async channels internally)
+        let event_handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
 
-        // Try to find the peripheral by its ID
-        // On macOS, this is a UUID; on Linux/Windows, this is a MAC address
+            rt.block_on(async move {
+                while let Some(event) = events.next().await {
+                    match event {
+                        CentralEvent::DeviceDiscovered(id) => {
+                            log::debug!("DeviceDiscovered: {:?}", id);
+                            if id.to_string() == target_id {
+                                if let Ok(peripheral) = adapter_clone.peripheral(&id).await {
+                                    let _ = tx.send(peripheral).await;
+                                    break;
+                                }
+                            }
+                        }
+                        CentralEvent::StateUpdate(state) => {
+                            log::debug!("AdapterStateUpdate: {:?}", state);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        });
 
-        let peripheral = peripherals
-            .into_iter()
-            .find(|p| p.id().to_string() == device_id_str)
+        // Wait for the device to be discovered with a timeout
+        let peripheral = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .context("Timeout waiting for device discovery")?
             .ok_or_else(|| anyhow!("Desk with ID {} not found. You may need to run 'init' again to rediscover the device.", device_id_str))?;
+
+        // Stop scanning once we found the device
+        let _ = adapter.stop_scan().await;
+
+        // Wait for the event thread to finish
+        let _ = event_handle.join();
 
         if !peripheral.is_connected().await? {
             peripheral
