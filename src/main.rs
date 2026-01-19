@@ -164,14 +164,14 @@ impl IdasenDesk {
         // Return the first one found that matches the service UUID
         for p in peripherals {
             let props = p.properties().await?;
-            if let Some(props) = props {
-                if props.services.contains(&UUID_ADV_SVC) {
-                    return Ok(Some(DiscoveredDesk {
-                        device_id: p.id().to_string(),
-                        name: props.local_name,
-                        address: props.address.to_string(),
-                    }));
-                }
+            if let Some(props) = props
+                && props.services.contains(&UUID_ADV_SVC)
+            {
+                return Ok(Some(DiscoveredDesk {
+                    device_id: p.id().to_string(),
+                    name: props.local_name,
+                    address: props.address.to_string(),
+                }));
             }
         }
         Ok(None)
@@ -195,7 +195,7 @@ impl IdasenDesk {
 
     async fn wakeup(&self) -> Result<()> {
         // Try DPG wakeup sequence (for DPG1C controllers)
-        if let Ok(_) = self.get_characteristic(UUID_DPG).await {
+        if (self.get_characteristic(UUID_DPG).await).is_ok() {
             let _ = self.write_char(UUID_DPG, b"\x7f\x86\x00").await;
             let _ = self.write_char(
                 UUID_DPG,
