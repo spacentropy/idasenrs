@@ -135,11 +135,11 @@ impl IdasenDesk {
                     match event {
                         CentralEvent::DeviceDiscovered(id) => {
                             log::debug!("DeviceDiscovered: {:?}", id);
-                            if id.to_string() == target_id {
-                                if let Ok(peripheral) = adapter_clone.peripheral(&id).await {
-                                    let _ = tx.send(peripheral).await;
-                                    break;
-                                }
+                            if id.to_string() == target_id
+                                && let Ok(peripheral) = adapter_clone.peripheral(&id).await
+                            {
+                                let _ = tx.send(peripheral).await;
+                                break;
                             }
                         }
                         CentralEvent::StateUpdate(state) => {
